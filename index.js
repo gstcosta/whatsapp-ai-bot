@@ -1,53 +1,77 @@
 const express = require("express");
 const axios = require("axios");
-const dotenv = require("dotenv");
-dotenv.config();
-
 const app = express();
-const port = 3000;
+const bodyParser = require("body-parser");
 
-app.use(express.json());
+// Habilitar CORS para o bot funcionar com a Z-API
+const cors = require("cors");
+app.use(cors());
 
-app.get("/", (req, res) => {
-  res.send("Servidor WhatsApp AI rodando!");
-});
+app.use(bodyParser.json());
 
-app.post("/", async (req, res) => {
-  const { message, sender } = req.body;
-  console.log(`📥 Mensagem recebida de ${sender}: ${message}`);
+// Carregar variáveis de ambiente
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const ZAPI_INSTANCE = process.env.ZAPI_INSTANCE;
+const ZAPI_TOKEN = process.env.ZAPI_TOKEN;
+
+const port = process.env.PORT || 3000;
+
+// Função para enviar a resposta para o WhatsApp via Z-API
+const sendMessage = async (to, message) => {
   try {
-    const resposta = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
+    await axios.post(
+      `https://api.z-api.io/instances/${ZAPI_INSTANCE}/token/${ZAPI_TOKEN}/sendMessage`,
       {
-        model: "gpt-3.5-turbo",
-        messages: [{ role: "user", content: message }],
+        phone: to,
+        message: message,
+      }
+    );
+  } catch (error) {
+    console.error("Erro ao enviar mensagem para o WhatsApp:", error);
+  }
+};
+
+// Função para interagir com a OpenAI (ChatGPT)
+const getOpenAIResponse = async (message) => {
+  try {
+    const response = await axios.post(
+      "https://api.openai.com/v1/completions",
+      {
+        model: "text-davinci-003",
+        prompt: message,
+        max_tokens: 150,
       },
       {
         headers: {
           "Content-Type": "application/json",
-          Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          Authorization: `Bearer ${OPENAI_API_KEY}`,
         },
       }
     );
-
-    const respostaTexto = resposta.data.choices[0].message.content;
-    console.log(`🤖 Resposta do ChatGPT: ${respostaTexto}`);
-
-    await axios.post(
-      `https://api.z-api.io/instances/${process.env.ZAPI_INSTANCE}/token/${process.env.ZAPI_TOKEN}/send-messages`,
-      {
-        phone: sender,
-        message: respostaTexto,
-      }
-    );
-
-    res.sendStatus(200);
+    return response.data.choices[0].text.trim();
   } catch (error) {
-    console.error("❌ Erro ao gerar ou enviar resposta:", error.message);
-    res.sendStatus(500);
+    console.error("Erro ao interagir com a OpenAI:", error);
+    return "Desculpe, houve um erro ao processar sua mensagem.";
   }
+};
+
+// Endpoint que recebe as mensagens do WhatsApp via Z-API
+app.post("/", async (req, res) => {
+  console.log(">> BODY RECEBIDO:", req.body); // Para depurar se o webhook está funcionando
+  const { sender, message } = req.body;
+
+  // Resposta automática da OpenAI
+  const aiResponse = await getOpenAIResponse(message);
+
+  // Enviar a resposta da IA para o WhatsApp
+  await sendMessage(sender, aiResponse);
+
+  // Responder com sucesso para o Z-API
+  res.status(200).send("Mensagem processada");
 });
 
+// Iniciar o servidor
 app.listen(port, () => {
   console.log(`🚀 Servidor rodando na porta ${port}`);
 });
+
